@@ -58,9 +58,9 @@ function Create-BatchFile {
     $batchContent = @'
 @echo off
 cd /d "%~dp0"
-python proxymanx.py %*
+python -m proxymanx %*
 if %ERRORLEVEL% neq 0 (
-    py proxymanx.py %*
+    py -m proxymanx %*
 )
 '@
     

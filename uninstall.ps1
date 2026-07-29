@@ -128,9 +128,10 @@ function Clear-ProxySettings {
     }
     
     try {
-        if (Test-Path "proxymanx.py") {
+        if (Test-Path "proxymanx" -PathType Container) {
             Write-ColoredOutput "Clearing proxy settings..." "Blue"
-            $result = & python proxymanx.py unset 2>&1
+            # 'unset all' is non-interactive; plain 'unset' would prompt and hang
+            $result = & python -m proxymanx unset all 2>&1
             
             if ($LASTEXITCODE -eq 0) {
                 Write-ColoredOutput "Proxy settings cleared" "Green"

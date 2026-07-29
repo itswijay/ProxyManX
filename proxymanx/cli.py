@@ -6,17 +6,31 @@ Core application logic for proxy management.
 import sys
 import os
 from typing import Dict, List, Any, Optional
-from config import ConfigManager
-from targets import get_available_targets, get_target_descriptions, PROXY_TARGETS
-from utils import *
+from .config import ConfigManager
+from .targets import get_available_targets, get_target_descriptions
+from .utils import (
+    get_colors,
+    get_default_no_proxy,
+    get_user_input,
+    get_yes_no_input,
+    parse_proxy_url,
+    print_colored,
+    print_error,
+    print_header,
+    print_info,
+    print_success,
+    print_warning,
+    setup_signal_handlers,
+    validate_proxy_config,
+)
 
 
 class ProxyManX:
     """Main proxy management class."""
     
-    def __init__(self):
+    def __init__(self, config_dir=None):
         self.colors = get_colors()
-        self.config_manager = ConfigManager()
+        self.config_manager = ConfigManager(config_dir=config_dir)
         self.available_targets = get_available_targets()
         self.target_descriptions = get_target_descriptions()
     
@@ -36,12 +50,21 @@ class ProxyManX:
         
         # Apply proxy settings
         self._apply_proxy_settings(config, targets)
-        
+
         # Ask to save configuration
+        saved_as = None
         if get_yes_no_input("Save this configuration for later use?"):
             name = get_user_input("Enter configuration name", "default")
-            if name:
-                self.config_manager.save_config(name, config)
+            if name and self.config_manager.save_config(name, config):
+                saved_as = name
+
+        if saved_as:
+            self.config_manager.set_active_profile(saved_as)
+            print_colored(f"Profile '{saved_as}' is now active", self.colors['green'])
+        else:
+            # The live settings no longer correspond to any saved profile, so
+            # any previously tracked one is now stale.
+            self.config_manager.clear_active_profile()
     
     def _get_proxy_config(self) -> Optional[Dict[str, Any]]:
         """Get proxy configuration from user input."""
@@ -240,12 +263,17 @@ class ProxyManX:
         
         # Show configuration details
         self._show_config_details(config)
-        
+
+        # Passwords are never stored in a profile, so prompt for it here
+        if config.get('use_auth') and not config.get('password'):
+            print_info(f"Profile '{config_name}' uses authentication (user: {config.get('username')})")
+            config['password'] = get_user_input("Password", password=True)
+
         # Get target selection
         targets = self._get_target_selection()
         if not targets:
             return
-        
+
         # Apply settings
         self._apply_proxy_settings(config, targets)
         
@@ -299,12 +327,74 @@ class ProxyManX:
         print_colored(f"Use 'proxymanx list' to see saved profiles", self.colors['cyan'])
     
     def save_current_config(self, config_name: str) -> None:
-        """Save current proxy configuration."""
+        """Save the proxy settings currently live on the system as a profile."""
         print_header(f"Saving Configuration: {config_name}")
-        
-        # This would need to read current settings from all targets
-        # For now, we'll just show an info message
-        print_info("Use 'proxymanx set' to create and save a new configuration")
+
+        config = self._read_live_config()
+        if not config:
+            print_error("No active proxy settings found to save")
+            print_info("Use 'proxymanx set' to configure a proxy first")
+            sys.exit(1)
+
+        self._show_config_details(config)
+
+        if self.config_manager.save_config(config_name, config):
+            self.config_manager.set_active_profile(config_name)
+            print_colored(f"Profile '{config_name}' is now active", self.colors['green'])
+
+    def _read_live_config(self) -> Optional[Dict[str, Any]]:
+        """Build a config dict from the proxy settings currently on the system.
+
+        Prefers the environment variables, since they carry full URLs including
+        any credentials. Falls back to the Windows system proxy, whose registry
+        value is a bare host:port.
+        """
+        http_parsed = https_parsed = None
+        no_proxy = ''
+
+        env_target = self.available_targets.get('environment')
+        if env_target:
+            env_settings = env_target.list_proxy() or {}
+            http_parsed = parse_proxy_url(
+                env_settings.get('HTTP_PROXY') or env_settings.get('http_proxy')
+            )
+            https_parsed = parse_proxy_url(
+                env_settings.get('HTTPS_PROXY') or env_settings.get('https_proxy')
+            )
+            no_proxy = env_settings.get('NO_PROXY') or env_settings.get('no_proxy') or ''
+
+        # Fall back to the system proxy when the environment is clean
+        if not http_parsed:
+            system_target = self.available_targets.get('system')
+            if system_target:
+                system_settings = system_target.list_proxy() or {}
+                if system_settings.get('status') == 'Enabled':
+                    http_parsed = parse_proxy_url(system_settings.get('server'))
+                    no_proxy = no_proxy or system_settings.get('override', '')
+
+        if not http_parsed:
+            return None
+
+        https_parsed = https_parsed or http_parsed
+
+        # A password may be present in the live URL, but it is deliberately not
+        # carried into the profile -- save_config never writes one.
+        return {
+            'http_host': http_parsed['host'],
+            'http_port': http_parsed['port'],
+            'https_host': https_parsed['host'],
+            'https_port': https_parsed['port'],
+            'ftp_host': http_parsed['host'],
+            'ftp_port': http_parsed['port'],
+            'use_auth': bool(http_parsed['username']),
+            'username': http_parsed['username'],
+            'password': '',
+            'no_proxy': no_proxy,
+            'use_same': (
+                http_parsed['host'] == https_parsed['host']
+                and http_parsed['port'] == https_parsed['port']
+            ),
+        }
     
     def show_help(self) -> None:
         """Show help information."""
@@ -360,48 +450,25 @@ class ProxyManX:
         try:
             # Get current proxy settings from environment (most common case)
             current_http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
-            
-            if not current_http_proxy:
+
+            parsed = parse_proxy_url(current_http_proxy)
+            if not parsed:
                 return None
-            
-            # Parse the proxy URL to extract host and port
-            if current_http_proxy.startswith('http://'):
-                proxy_part = current_http_proxy[7:]  # Remove 'http://'
-            elif current_http_proxy.startswith('https://'):
-                proxy_part = current_http_proxy[8:]  # Remove 'https://'
-            else:
-                proxy_part = current_http_proxy
-            
-            # Remove trailing slash if present
-            if proxy_part.endswith('/'):
-                proxy_part = proxy_part[:-1]
-            
-            # Parse host:port
-            if ':' in proxy_part:
-                current_host, current_port = proxy_part.split(':', 1)
-                try:
-                    current_port = int(current_port)
-                except ValueError:
-                    return None
-            else:
-                current_host = proxy_part
-                current_port = 8080  # Default port
-            
+
             # Check each saved configuration
-            configs = self.config_manager.list_configs()
-            for config_name in configs:
+            for config_name in self.config_manager.list_configs():
                 config = self.config_manager.load_config(config_name)
                 if config:
                     # Compare host and port
-                    if (config.get('http_host') == current_host and 
-                        config.get('http_port') == current_port):
+                    if (config.get('http_host') == parsed['host'] and
+                            config.get('http_port') == parsed['port']):
                         # Update the tracked active profile
                         self.config_manager.set_active_profile(config_name)
                         return config_name
-            
+
             return None
-            
-        except Exception as e:
+
+        except Exception:
             # If any error occurs, just return None
             return None
 
@@ -409,7 +476,6 @@ class ProxyManX:
 def main():
     """Main entry point."""
     # Setup signal handlers for graceful Ctrl+C handling
-    from utils import setup_signal_handlers
     setup_signal_handlers()
     
     try:

@@ -137,9 +137,9 @@ def clear_proxy_settings():
     
     try:
         # Try to run ProxyManX unset command with 'all' parameter to bypass interactive mode
-        if Path("proxymanx.py").exists():
+        if Path("proxymanx").is_dir():
             print_colored("Clearing proxy settings...", 'blue')
-            result = subprocess.run([sys.executable, "proxymanx.py", "unset", "all"], 
+            result = subprocess.run([sys.executable, "-m", "proxymanx", "unset", "all"],
                                   capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0:
