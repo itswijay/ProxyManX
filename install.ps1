@@ -50,7 +50,6 @@ function Install-Dependencies {
         return $false
     }
 }
-}
 
 function Create-BatchFile {
     Write-ColoredOutput "Creating batch file..." "Blue"

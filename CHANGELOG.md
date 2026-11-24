@@ -40,6 +40,8 @@
   port as a string.
 - The PowerShell uninstaller invoked `unset` without `all` and would hang on the
   interactive prompt — the same bug fixed for the Python uninstaller in 2.0.0.
+- `install.ps1` had a stray closing brace after `Install-Dependencies`, a syntax
+  error that stops PowerShell from running the script.
 - `deploy.py` still packaged `proxyman.py`, `proxyman.bat` and the deleted
   `install-simple.ps1`, so its output was missing the application entirely.
 - The declared version (`1.0.0`) disagreed with the CHANGELOG. `__version__` in
