@@ -3,20 +3,27 @@
 ProxyManX Windows Setup Script
 """
 
+import re
 from setuptools import setup, find_packages
 from pathlib import Path
 
-# Read the contents of README file
 this_directory = Path(__file__).parent
+
+# Read the contents of README file
 long_description = (this_directory / "README.md").read_text(encoding='utf-8')
 
-# Read version from src/__init__.py
+
 def get_version():
-    import sys
-    import os
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-    from src import __version__
-    return __version__
+    """Read __version__ from the package without importing it.
+
+    Importing would pull in colorama, which may not be installed at build time.
+    """
+    init_py = (this_directory / "proxymanx" / "__init__.py").read_text(encoding='utf-8')
+    match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', init_py, re.MULTILINE)
+    if not match:
+        raise RuntimeError("Unable to find __version__ in proxymanx/__init__.py")
+    return match.group(1)
+
 
 setup(
     name="proxymanx",
@@ -26,8 +33,8 @@ setup(
     description="Comprehensive Windows proxy configuration tool",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/thewijay/ProxyManX-win",
-    packages=find_packages(),
+    url="https://github.com/thewijay/ProxyManX",
+    packages=find_packages(include=["proxymanx", "proxymanx.*"]),
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -48,19 +55,21 @@ setup(
     python_requires=">=3.7",
     install_requires=[
         "colorama>=0.4.4",
-        "click>=8.0.0",
     ],
+    extras_require={
+        "dev": ["pytest>=7.0"],
+    },
     entry_points={
         "console_scripts": [
-            "proxymanx=src.proxymanx:main",
+            "proxymanx=proxymanx.cli:main",
         ],
     },
     include_package_data=True,
     zip_safe=False,
     keywords="proxy windows configuration network system administration",
     project_urls={
-        "Bug Reports": "https://github.com/thewijay/ProxyManX-win/issues",
-        "Source": "https://github.com/thewijay/ProxyManX-win",
-        "Documentation": "https://github.com/thewijay/ProxyManX-win/blob/main/README.md",
+        "Bug Reports": "https://github.com/thewijay/ProxyManX/issues",
+        "Source": "https://github.com/thewijay/ProxyManX",
+        "Documentation": "https://github.com/thewijay/ProxyManX/blob/main/README.md",
     },
 )

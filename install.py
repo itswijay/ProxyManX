@@ -99,9 +99,9 @@ def create_batch_file():
     """Create batch file for easy execution"""
     print_section("Creating Launcher")
     
-    batch_content = f"""@echo off
+    batch_content = """@echo off
 cd /d "%~dp0"
-python proxymanx.py %*
+python -m proxymanx %*
 """
     
     try:
@@ -124,7 +124,7 @@ def add_to_path():
     if os.name != 'nt':
         print_error("PATH modification only supported on Windows")
         print_info("You can still run ProxyManX using:")
-        print_info(f"python {os.path.join(current_dir, 'proxymanx.py')}")
+        print_info(f"python -m proxymanx  (from {current_dir})")
         print_info(f"{os.path.join(current_dir, 'proxymanx.bat')}")
         return False
     
@@ -180,7 +180,7 @@ def add_to_path():
     except ImportError:
         print_colored("winreg module not available (Windows only)", 'red')
         print_colored("You can still run ProxyManX using:", 'cyan')
-        print_colored(f"  python {os.path.join(current_dir, 'proxymanx.py')}", 'white')
+        print_colored(f"  python -m proxymanx  (from {current_dir})", 'white')
         print_colored(f"  or {os.path.join(current_dir, 'proxymanx.bat')}", 'white')
         return False
         
@@ -233,7 +233,7 @@ def add_to_path():
         # If all fails, provide manual instructions
         print_colored("Could not automatically add to PATH", 'yellow')
         print_colored("You can still run ProxyManX using:", 'cyan')
-        print_colored(f"  python {os.path.join(current_dir, 'proxymanx.py')}", 'white')
+        print_colored(f"  python -m proxymanx  (from {current_dir})", 'white')
         print_colored(f"  or {os.path.join(current_dir, 'proxymanx.bat')}", 'white')
         return False
 
@@ -285,7 +285,7 @@ def main():
     else:
         print_colored("Manual Usage Instructions:", 'cyan')
         print()
-        print_info("python proxymanx.py help")
+        print_info("python -m proxymanx help")
         print_info(".\\proxymanx.bat help")
         print()
         print_colored("To add to PATH manually:", 'yellow')

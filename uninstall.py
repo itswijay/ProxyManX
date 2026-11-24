@@ -137,9 +137,9 @@ def clear_proxy_settings():
     
     try:
         # Try to run ProxyManX unset command with 'all' parameter to bypass interactive mode
-        if Path("proxymanx.py").exists():
+        if Path("proxymanx").is_dir():
             print_colored("Clearing proxy settings...", 'blue')
-            result = subprocess.run([sys.executable, "proxymanx.py", "unset", "all"], 
+            result = subprocess.run([sys.executable, "-m", "proxymanx", "unset", "all"],
                                   capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0:
@@ -207,7 +207,7 @@ def main():
     print_colored("\nUninstallation completed!", 'green')
     print_colored("ProxyManX Windows has been removed from your system.", 'green')
     
-    print_colored("\n📋 Manual cleanup (if needed):", 'cyan')
+    print_colored("\nManual cleanup (if needed):", 'cyan')
     print_colored("  • Check Windows proxy settings in Internet Options", 'white')
     print_colored("  • Verify git proxy settings: git config --global -l", 'white')
     print_colored("  • Check npm proxy settings: npm config list", 'white')

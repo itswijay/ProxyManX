@@ -8,7 +8,7 @@ import sys
 import subprocess
 import ctypes
 import signal
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from colorama import init, Fore, Back, Style
 
 # Initialize colorama for Windows
@@ -98,11 +98,13 @@ def validate_proxy_config(config: Dict[str, Any]) -> bool:
         port = config.get(port_field)
         if port and not isinstance(port, int):
             try:
-                config[port_field] = int(port)
+                # Rebind port too, otherwise the range check below compares
+                # the original string against an int and raises TypeError.
+                port = config[port_field] = int(port)
             except ValueError:
                 print_colored(f"Invalid port number: {port}", get_colors()['red'])
                 return False
-        
+
         if port and (port < 1 or port > 65535):
             print_colored(f"Port number out of range: {port}", get_colors()['red'])
             return False
@@ -115,6 +117,66 @@ def format_proxy_url(host: str, port: int, username: str = None, password: str =
     if username and password:
         return f"{protocol}://{username}:{password}@{host}:{port}"
     return f"{protocol}://{host}:{port}"
+
+
+DEFAULT_PROXY_PORT = 8080
+
+
+def parse_proxy_url(url: str) -> Optional[Dict[str, Any]]:
+    """Parse a proxy URL into its parts. The inverse of format_proxy_url.
+
+    Accepts values with or without a scheme, so it handles both environment
+    variables ("http://user:pass@host:8080") and the Windows registry's
+    ProxyServer value ("host:8080").
+
+    Returns a dict with host/port/username/password, or None if the value
+    cannot be parsed. Port defaults to DEFAULT_PROXY_PORT when absent.
+    """
+    if not url or not url.strip():
+        return None
+
+    remainder = url.strip()
+
+    # Strip the scheme, if any
+    if '://' in remainder:
+        remainder = remainder.split('://', 1)[1]
+
+    remainder = remainder.rstrip('/')
+    if not remainder:
+        return None
+
+    # Split off credentials. rsplit because a password may contain '@'.
+    username = password = ''
+    if '@' in remainder:
+        credentials, remainder = remainder.rsplit('@', 1)
+        if ':' in credentials:
+            username, password = credentials.split(':', 1)
+        else:
+            username = credentials
+
+    if not remainder:
+        return None
+
+    # Split host:port
+    if ':' in remainder:
+        host, port_str = remainder.rsplit(':', 1)
+        try:
+            port = int(port_str)
+        except ValueError:
+            return None
+    else:
+        host = remainder
+        port = DEFAULT_PROXY_PORT
+
+    if not host:
+        return None
+
+    return {
+        'host': host,
+        'port': port,
+        'username': username,
+        'password': password,
+    }
 
 
 def run_command(cmd: str, shell: bool = True) -> tuple:

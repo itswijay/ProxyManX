@@ -9,12 +9,11 @@ A comprehensive Windows proxy management tool built with Python.
 - **System-wide proxy configuration** for Windows
 - **Profile management** - save, load, and delete proxy configurations
 - **Multiple target support**:
-  - Windows system proxy settings
+  - Windows system proxy settings (Registry)
   - Environment variables
   - Git configuration
   - NPM/Yarn configuration
-  - PowerShell/Command Prompt
-  - Windows Registry
+  - PowerShell profile
 - **Interactive CLI** with colorized output
 - **Authentication support** for proxy servers
 - **Batch operations** on multiple targets
@@ -27,18 +26,29 @@ A comprehensive Windows proxy management tool built with Python.
 
 ## Installation
 
-### Option 1: Simple Installation (Recommended)
+### Option 1: pip (Recommended)
 
 ```powershell
-# Download or clone the repository
 git clone https://github.com/thewijay/ProxyManX.git
 cd ProxyManX
 
-# Run the Python installer
+pip install .
+```
+
+This installs the `proxymanx` command onto your PATH.
+
+### Option 2: Python Installer
+
+Adds the project directory to your PATH and creates a `proxymanx.bat` launcher.
+
+```powershell
+git clone https://github.com/thewijay/ProxyManX.git
+cd ProxyManX
+
 python install.py
 ```
 
-### Option 2: PowerShell Installation
+### Option 3: PowerShell Installation
 
 ```powershell
 # Quick installation (recommended):
@@ -53,14 +63,14 @@ python install.py
 .\install.ps1
 ```
 
-### Option 3: Manual Installation
+### Option 4: Manual Installation
 
 ```powershell
 # Install dependencies
 pip install -r requirements.txt
 
-# Use the batch file to run the tool
-.\proxymanx.bat help
+# Run without installing
+python -m proxymanx help
 ```
 
 ## Uninstallation
@@ -119,11 +129,17 @@ proxymanx list
 
 ### Save Configuration
 
+Captures the proxy settings currently live on your system and stores them as a
+named profile.
+
 ```bash
 proxymanx save profile_name
 ```
 
 ### Load Configuration
+
+Applies a saved profile. If the profile uses authentication you are prompted for
+the password, since passwords are not stored.
 
 ```bash
 proxymanx load profile_name
@@ -149,17 +165,25 @@ proxymanx help
 
 ## Supported Targets
 
-1. **System Proxy** - Windows system proxy settings via Registry
-2. **Environment Variables** - User and system environment variables
+1. **System Proxy** - Windows system proxy settings, written via the Registry.
+   This is what Internet Explorer, Edge and most GUI applications read.
+2. **Environment Variables** - `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`, set for
+   the current session and persisted for future ones. Console applications,
+   including Command Prompt, pick these up.
 3. **Git** - Global git proxy configuration
 4. **NPM/Yarn** - Package manager proxy settings
 5. **PowerShell** - PowerShell profile proxy settings
-6. **Command Prompt** - CMD environment variables
-7. **Internet Explorer** - IE proxy settings (affects many apps)
+
+Targets are detected at runtime; anything not present on your system (no Git, no
+npm, or the Windows-only targets when running elsewhere) is skipped.
 
 ## Configuration Files
 
-Profiles are stored in `%USERPROFILE%\.proxymanx\` directory.
+Profiles are stored in the `%USERPROFILE%\.proxymanx\` directory.
+
+**Passwords are never written to disk.** When a profile uses authentication,
+only the username is saved; the password is prompted for each time you run
+`proxymanx load`.
 
 ## Notes
 
@@ -172,19 +196,29 @@ Profiles are stored in `%USERPROFILE%\.proxymanx\` directory.
 
 ```
 ProxyManX/
-├── src/                    # Core application modules
-│   ├── config.py          # Configuration management
-│   ├── proxymanx.py       # Main application logic
+├── proxymanx/             # Core application package
+│   ├── __init__.py        # Package metadata
+│   ├── __main__.py        # Entry point for `python -m proxymanx`
+│   ├── cli.py             # Command dispatch and interactive flows
+│   ├── config.py          # Profile storage
 │   ├── targets.py         # Proxy target handlers
 │   └── utils.py           # Utility functions
+├── tests/                 # pytest suite
 ├── install.py             # Python installer
 ├── install.ps1            # Unified PowerShell installer
 ├── uninstall.py           # Python uninstaller
 ├── uninstall.ps1          # PowerShell uninstaller
-├── proxymanx.py           # Main entry point
 ├── proxymanx.bat          # Windows batch launcher
+├── setup.py               # Packaging metadata
 ├── requirements.txt       # Python dependencies
 └── README.md              # This file
+```
+
+## Development
+
+```powershell
+pip install -e ".[dev]"
+pytest
 ```
 
 ## Acknowledgments
@@ -237,11 +271,12 @@ MIT License
 - Install dependencies: `pip install -r requirements.txt`
 - Make sure you're in the correct project directory
 
-**Error: "proxyman is not recognized"**
+**Error: "proxymanx is not recognized"**
 
 - The tool is not in your system PATH
-- Use `.\proxyman.bat` or `python proxyman.py` instead
-- Or run `python install.py` as Administrator to add to PATH
+- Use `.\proxymanx.bat` or `python -m proxymanx` instead
+- Or run `pip install .`, which puts `proxymanx` on your PATH
+- Or run `python install.py` to add the project directory to PATH
 
 **Error: "Access is denied" or "Permission denied"**
 
@@ -283,7 +318,7 @@ proxymanx help
 # or
 .\proxymanx.bat help
 # or
-python proxymanx.py help
+python -m proxymanx help
 ```
 
 **For additional support**:

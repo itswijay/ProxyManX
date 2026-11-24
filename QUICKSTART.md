@@ -2,18 +2,25 @@
 
 ## Installation
 
-### Option 1: Python Installation (Cross-platform)
+### Option 1: pip (Recommended)
 
 ```powershell
-# Download or clone the repository
 git clone https://github.com/thewijay/ProxyManX.git
 cd ProxyManX
 
-# Run the Python installer (automatically adds to user PATH)
+pip install .
+```
+
+### Option 2: Python Installer (adds this directory to PATH)
+
+```powershell
+git clone https://github.com/thewijay/ProxyManX.git
+cd ProxyManX
+
 python install.py
 ```
 
-### Option 2: PowerShell Installation (Windows-only)
+### Option 3: PowerShell Installation (Windows-only)
 
 ```powershell
 # Quick installation (recommended):
@@ -23,14 +30,14 @@ python install.py
 .\install.ps1
 ```
 
-### Option 3: Manual Installation
+### Option 4: Manual Installation
 
 ```powershell
 # Install dependencies
 pip install -r requirements.txt
 
-# Use the batch file to run the tool
-.\proxymanx.bat help
+# Run without installing
+python -m proxymanx help
 ```
 
 ## Uninstallation
@@ -75,7 +82,7 @@ proxymanx set
 
 # If not in PATH, use one of these:
 .\proxymanx.bat set
-python proxymanx.py set
+python -m proxymanx set
 ```
 
 This will start an interactive setup where you can:
@@ -93,7 +100,7 @@ proxymanx list
 
 # If not in PATH, use one of these:
 .\proxymanx.bat list
-python proxymanx.py list
+python -m proxymanx list
 ```
 
 Shows current proxy settings for all supported applications.
@@ -112,7 +119,7 @@ proxymanx unset git npm
 
 # If not in PATH, use one of these:
 .\proxymanx.bat unset
-python proxymanx.py unset all
+python -m proxymanx unset all
 ```
 
 Removes proxy settings from selected applications.
@@ -124,7 +131,7 @@ Removes proxy settings from selected applications.
 proxymanx configs
 # or: .\proxymanx.bat configs
 
-# Save current settings
+# Save the proxy settings currently live on the system as a profile
 proxymanx save office_proxy
 # or: .\proxymanx.bat save office_proxy
 
@@ -176,7 +183,7 @@ proxymanx delete office_proxy
 2. **Save configurations** for easy switching between environments
 3. **Use selective targeting** to only configure specific applications
 4. **Check current settings** with `.\proxymanx.bat list` before making changes
-5. **If not in PATH**: Use `.\proxymanx.bat` or `python proxymanx.py` instead of just `proxymanx`
+5. **If not in PATH**: Use `.\proxymanx.bat` or `python -m proxymanx` instead of just `proxymanx`
 
 ## Troubleshooting
 
@@ -210,7 +217,7 @@ python install.py
 
 # If PATH wasn't added automatically, use these alternatives:
 .\proxymanx.bat help
-python proxymanx.py help
+python -m proxymanx help
 
 # Or add to PATH manually:
 # 1. Open "Environment Variables" in Windows System Properties
@@ -222,7 +229,7 @@ python proxymanx.py help
 **Error: "Administrator privileges required to add to system PATH"**
 
 - The Python installer now automatically tries user PATH first (no admin needed)
-- Use `.\proxymanx.bat` or `python proxymanx.py` if PATH addition fails
+- Use `.\proxymanx.bat` or `python -m proxymanx` if PATH addition fails
 - For system-wide installation, run as Administrator or use PowerShell installer
 
 ### Common Issues
@@ -261,14 +268,14 @@ python -c "import py_compile; py_compile.compile('uninstall.py')"
 python uninstall.py
 
 # Or use the manual cleanup approach:
-python proxymanx.py unset all
+python -m proxymanx unset all
 python uninstall.py
 ```
 
-**Error: "Command 'proxymanx.py unset' timed out after 30 seconds"**
+**Error: "Command 'proxymanx unset' timed out after 30 seconds"**
 
 - Update to the latest version which includes non-interactive unset
-- The new version uses `proxymanx.py unset all` for automatic cleanup
+- The uninstallers use `python -m proxymanx unset all` for automatic cleanup
 
 ### Getting Help
 
@@ -278,17 +285,20 @@ proxymanx help
 
 # If not in PATH, use one of these:
 .\proxymanx.bat help
-python proxymanx.py help
+python -m proxymanx help
 ```
 
 For more detailed help, check the README.md file or visit the project repository.
 
 ## Security Notes
 
-- Configuration files may contain passwords
-- Don't share configuration files with credentials
-- Use authentication only when necessary
-- Consider using environment variables for sensitive data
+- **Passwords are never written to disk.** A profile stores the username only;
+  the password is prompted for each time you run `proxymanx load`.
+- While a proxy is applied, credentials do appear in the values ProxyManX
+  writes to the environment, git config and npm config. That is inherent to how
+  those tools accept a proxy, so treat `git config --global -l` and
+  `npm config list` output as sensitive.
+- Use authentication only when your proxy requires it.
 
 ## Next Steps
 

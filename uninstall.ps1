@@ -4,7 +4,8 @@
 param(
     [switch]$Force,
     [switch]$KeepConfig,
-    [switch]$KeepProxy
+    [switch]$KeepProxy,
+    [switch]$NoPause
 )
 
 # Colors for output
@@ -128,9 +129,10 @@ function Clear-ProxySettings {
     }
     
     try {
-        if (Test-Path "proxymanx.py") {
+        if (Test-Path "proxymanx" -PathType Container) {
             Write-ColoredOutput "Clearing proxy settings..." "Blue"
-            $result = & python proxymanx.py unset 2>&1
+            # 'unset all' is non-interactive; plain 'unset' would prompt and hang
+            $result = & python -m proxymanx unset all 2>&1
             
             if ($LASTEXITCODE -eq 0) {
                 Write-ColoredOutput "Proxy settings cleared" "Green"
@@ -156,6 +158,7 @@ function Show-Help {
     Write-ColoredOutput "  -Force        Don't ask for confirmation" "White"
     Write-ColoredOutput "  -KeepConfig   Keep configuration files" "White"
     Write-ColoredOutput "  -KeepProxy    Don't clear proxy settings" "White"
+    Write-ColoredOutput "  -NoPause      Don't wait for a key press at the end" "White"
     Write-ColoredOutput ""
     Write-ColoredOutput "Examples:" "White"
     Write-ColoredOutput "  .\uninstall.ps1                    # Interactive uninstall" "White"
@@ -238,5 +241,7 @@ try {
     exit 1
 }
 
-Write-ColoredOutput "`nPress any key to continue..." "Yellow"
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+if (-not $NoPause) {
+    Write-ColoredOutput "`nPress any key to continue..." "Yellow"
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}

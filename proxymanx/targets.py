@@ -9,7 +9,15 @@ import platform
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional
 from pathlib import Path
-from utils import *
+from .utils import (
+    format_proxy_url,
+    get_colors,
+    print_error,
+    print_info,
+    print_success,
+    print_warning,
+    run_command,
+)
 
 # Windows-specific imports
 if platform.system() == "Windows":
@@ -504,9 +512,13 @@ class PowerShellProxyTarget(ProxyTarget):
         self.profile_path = self._get_profile_path()
     
     def is_available(self) -> bool:
-        """PowerShell is always available on Windows."""
-        return True
-    
+        """PowerShell profile management is Windows-only.
+
+        Without this check the target is considered live on Linux/macOS and
+        writes a profile into ~/Documents/WindowsPowerShell/.
+        """
+        return platform.system() == "Windows"
+
     def _get_profile_path(self) -> Optional[Path]:
         """Get PowerShell profile path."""
         try:

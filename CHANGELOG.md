@@ -1,5 +1,69 @@
 # ProxyManX Windows - Changelog
 
+## v2.1.0 - Packaging and Correctness
+
+### Breaking Changes
+
+- **Passwords are no longer saved to profiles.** A profile stores the username
+  only; `proxymanx load` prompts for the password when the profile uses
+  authentication. Existing profiles that contain a password still load, and the
+  password is dropped the next time that profile is saved.
+- **`python proxymanx.py` is gone.** The top-level script has been replaced by a
+  real package — use `proxymanx`, or `python -m proxymanx` when running from a
+  checkout. `proxymanx.bat` has been updated accordingly.
+- **Existing installations must be re-installed.** The launcher on your PATH
+  points at the removed script. Run `pip install .` or `python install.py` again.
+
+### Added
+
+- `pip install .` now produces a working `proxymanx` command. The package was
+  previously unimportable when installed, because the modules used flat imports
+  that only resolved through a `sys.path` shim.
+- `proxymanx save <name>` is implemented. It reads the proxy settings currently
+  live on the system — from the environment, falling back to the Windows system
+  proxy — and stores them as a profile. It was previously a stub that printed
+  "use `set` instead".
+- A pytest suite covering profile storage, URL parsing, config validation and
+  the environment target. Run with `pip install -e ".[dev]"` then `pytest`.
+- GitHub Actions workflow that runs the tests on Linux and Windows, and runs the
+  PowerShell installer, all five targets and the uninstaller on Windows.
+- `-NoPause` option for `install.ps1` and `uninstall.ps1`, for unattended use.
+
+### Fixed
+
+- `proxymanx delete <name>` silently failed for `.json` profiles. They were
+  listed by `list` but only `.ini` files were ever removed.
+- `proxymanx set` did not record the new profile as active, so `list` reported
+  "no active profile" immediately after creating one. Declining to save now
+  clears the previously active profile instead of leaving a stale pointer.
+- `PowerShellProxyTarget.is_available()` returned `True` on every platform, so
+  on Linux and macOS the target went live and wrote a profile into
+  `~/Documents/WindowsPowerShell/`.
+- `validate_proxy_config` raised `TypeError` instead of validating when given a
+  port as a string.
+- The PowerShell uninstaller invoked `unset` without `all` and would hang on the
+  interactive prompt — the same bug fixed for the Python uninstaller in 2.0.0.
+- `install.ps1` had a stray closing brace after `Install-Dependencies`, a syntax
+  error that stops PowerShell from running the script.
+- Saving, deleting or failing to load a profile crashed on Windows when the output
+  was piped, because the messages contained emoji. `set` then failed to record
+  the active profile.
+- The launcher created by `install.ps1` ran the command a second time after any
+  error. It now uses `py` only when `python` is unavailable, and no longer
+  changes the caller's current directory.
+- `deploy.py` still packaged `proxyman.py`, `proxyman.bat` and the deleted
+  `install-simple.ps1`, so its output was missing the application entirely.
+- The declared version (`1.0.0`) disagreed with the CHANGELOG. `__version__` in
+  `proxymanx/__init__.py` is now the single source of truth, read by `setup.py`.
+
+### Changed
+
+- `src/` is now the `proxymanx` package: `src/proxymanx.py` became
+  `proxymanx/cli.py`, all intra-package imports are relative, and the
+  `from utils import *` wildcards were replaced with explicit imports.
+- Dropped the unused `click` dependency.
+- README lists the 5 targets that actually exist (it previously advertised 7).
+
 ## v2.0.0 - ProxyManX Release (Professional Version)
 
 ### Major Changes

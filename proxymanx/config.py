@@ -8,27 +8,29 @@ import json
 import configparser
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from utils import get_colors, print_colored
+from .utils import get_colors, print_colored
 
 
 class ConfigManager:
     """Manages proxy configuration profiles."""
     
-    def __init__(self):
+    # Profile formats we know how to read. INI is the format we write.
+    CONFIG_SUFFIXES = ('.ini', '.json')
+
+    def __init__(self, config_dir: Optional[Path] = None):
         self.colors = get_colors()
-        self.config_dir = Path.home() / '.proxymanx'
-        self.config_dir.mkdir(exist_ok=True)
+        self.config_dir = Path(config_dir) if config_dir else Path.home() / '.proxymanx'
+        self.config_dir.mkdir(parents=True, exist_ok=True)
         self.default_config = 'default'
     
     def list_configs(self) -> List[str]:
         """List all available configuration profiles."""
         configs = []
         if self.config_dir.exists():
-            for file in self.config_dir.glob('*.ini'):
-                configs.append(file.stem)
-            for file in self.config_dir.glob('*.json'):
-                configs.append(file.stem)
-        return sorted(configs)
+            for suffix in self.CONFIG_SUFFIXES:
+                for file in self.config_dir.glob(f'*{suffix}'):
+                    configs.append(file.stem)
+        return sorted(set(configs))
     
     def save_config(self, name: str, config: Dict[str, Any]) -> bool:
         """Save a configuration profile."""
@@ -48,7 +50,8 @@ class ConfigManager:
             parser.set('proxy', 'ftp_port', str(config.get('ftp_port', '')))
             parser.set('proxy', 'use_auth', str(config.get('use_auth', False)))
             parser.set('proxy', 'username', config.get('username', ''))
-            parser.set('proxy', 'password', config.get('password', ''))
+            # Passwords are deliberately never written to disk. When a profile
+            # has use_auth set, the password is prompted for at apply time.
             parser.set('proxy', 'no_proxy', config.get('no_proxy', ''))
             parser.set('proxy', 'use_same', str(config.get('use_same', False)))
             
@@ -56,11 +59,11 @@ class ConfigManager:
             with open(config_file, 'w') as f:
                 parser.write(f)
             
-            print_colored(f"✅ Configuration saved to {config_file}", self.colors['green'])
+            print_colored(f"Configuration saved to {config_file}", self.colors['green'])
             return True
             
         except Exception as e:
-            print_colored(f"❌ Error saving configuration: {e}", self.colors['red'])
+            print_colored(f"Error saving configuration: {e}", self.colors['red'])
             return False
     
     def load_config(self, name: str) -> Optional[Dict[str, Any]]:
@@ -77,14 +80,14 @@ class ConfigManager:
             config_file = self.config_dir / f'{name}.ini'
             
             if not config_file.exists():
-                print_colored(f"❌ Configuration '{name}' not found", self.colors['red'])
+                print_colored(f"Configuration '{name}' not found", self.colors['red'])
                 return None
             
             parser = configparser.ConfigParser()
             parser.read(config_file)
             
             if not parser.has_section('proxy'):
-                print_colored(f"❌ Invalid configuration file: {config_file}", self.colors['red'])
+                print_colored(f"Invalid configuration file: {config_file}", self.colors['red'])
                 return None
             
             config = {
@@ -96,7 +99,10 @@ class ConfigManager:
                 'ftp_port': parser.get('proxy', 'ftp_port'),
                 'use_auth': parser.getboolean('proxy', 'use_auth'),
                 'username': parser.get('proxy', 'username'),
-                'password': parser.get('proxy', 'password'),
+                # Profiles written before 2.1.0 may still carry a password.
+                # It is read so those profiles keep working, and dropped on
+                # the next save.
+                'password': parser.get('proxy', 'password', fallback=''),
                 'no_proxy': parser.get('proxy', 'no_proxy'),
                 'use_same': parser.getboolean('proxy', 'use_same')
             }
@@ -111,24 +117,36 @@ class ConfigManager:
             return config
             
         except Exception as e:
-            print_colored(f"❌ Error loading configuration: {e}", self.colors['red'])
+            print_colored(f"Error loading configuration: {e}", self.colors['red'])
             return None
     
     def delete_config(self, name: str) -> bool:
         """Delete a configuration profile."""
         try:
-            config_file = self.config_dir / f'{name}.ini'
-            
-            if not config_file.exists():
-                print_colored(f"❌ Configuration '{name}' not found", self.colors['red'])
+            # Delete every format list_configs() would have surfaced, not just
+            # the INI we write ourselves.
+            deleted = False
+            for suffix in self.CONFIG_SUFFIXES:
+                config_file = self.config_dir / f'{name}{suffix}'
+                if config_file.exists():
+                    config_file.unlink()
+                    deleted = True
+
+            if not deleted:
+                print_colored(f"Configuration '{name}' not found", self.colors['red'])
                 return False
-            
-            config_file.unlink()
-            print_colored(f"✅ Configuration '{name}' deleted", self.colors['green'])
+
+            # A deleted profile can no longer be the active one. get_active_profile()
+            # would eventually notice on its own, but clear it eagerly so the
+            # state file never points at something that is gone.
+            if self._read_active_profile() == name:
+                self.clear_active_profile()
+
+            print_colored(f"Configuration '{name}' deleted", self.colors['green'])
             return True
             
         except Exception as e:
-            print_colored(f"❌ Error deleting configuration: {e}", self.colors['red'])
+            print_colored(f"Error deleting configuration: {e}", self.colors['red'])
             return False
     
     def print_configs(self) -> None:
@@ -163,7 +181,7 @@ class ConfigManager:
     
     def show_current_configs(self) -> None:
         """Show current proxy configurations for all targets."""
-        from targets import get_available_targets
+        from .targets import get_available_targets
         
         print_colored("Current Proxy Configurations for All Targets:", self.colors['cyan'])
         print_colored("=" * 60, self.colors['cyan'])
@@ -181,37 +199,45 @@ class ConfigManager:
         print_colored("\n" + "=" * 60, self.colors['cyan'])
         print_colored("Use 'proxymanx list' to see available profiles", self.colors['cyan'])
     
+    @property
+    def _active_profile_file(self) -> Path:
+        return self.config_dir / '.active_profile'
+
+    def _read_active_profile(self) -> Optional[str]:
+        """Read the recorded active profile name without validating it."""
+        try:
+            if self._active_profile_file.exists():
+                return self._active_profile_file.read_text().strip() or None
+        except Exception:
+            pass
+        return None
+
     def set_active_profile(self, profile_name: str) -> None:
         """Set the currently active profile."""
         try:
-            state_file = self.config_dir / '.active_profile'
-            with open(state_file, 'w') as f:
-                f.write(profile_name)
+            self._active_profile_file.write_text(profile_name)
         except Exception as e:
             print_colored(f"Warning: Could not save active profile state: {e}", self.colors['yellow'])
-    
+
     def get_active_profile(self) -> Optional[str]:
-        """Get the currently active profile."""
-        try:
-            state_file = self.config_dir / '.active_profile'
-            if state_file.exists():
-                with open(state_file, 'r') as f:
-                    profile_name = f.read().strip()
-                    # Verify the profile still exists
-                    if profile_name in self.list_configs():
-                        return profile_name
-                    else:
-                        # Profile was deleted, clear the state
-                        self.clear_active_profile()
+        """Get the currently active profile, if it still exists."""
+        profile_name = self._read_active_profile()
+        if profile_name is None:
             return None
-        except Exception:
-            return None
-    
+
+        if profile_name in self.list_configs():
+            return profile_name
+
+        # Profile was deleted out from under us, clear the stale state
+        self.clear_active_profile()
+        return None
+
     def clear_active_profile(self) -> None:
         """Clear the active profile state."""
         try:
-            state_file = self.config_dir / '.active_profile'
-            if state_file.exists():
-                state_file.unlink()
+            # Not unlink(missing_ok=True) -- that is Python 3.8+, and this
+            # package supports 3.7.
+            if self._active_profile_file.exists():
+                self._active_profile_file.unlink()
         except Exception:
             pass
