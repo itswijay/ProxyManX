@@ -6,6 +6,7 @@ param(
     [switch]$UserOnly,
     [switch]$SkipPath,
     [switch]$Simple,
+    [switch]$NoPause,
     [switch]$Help,
     [string]$InstallPath = $null
 )
@@ -212,6 +213,7 @@ function Show-Help {
     Write-ColoredOutput "  -SystemWide    Install system-wide (requires admin)" "White"
     Write-ColoredOutput "  -UserOnly      Install for current user only" "White"
     Write-ColoredOutput "  -SkipPath      Skip adding to PATH" "White"
+    Write-ColoredOutput "  -NoPause       Don't wait for a key press at the end" "White"
     Write-ColoredOutput "  -Help          Show this help message" "White"
     Write-ColoredOutput ""
     Write-ColoredOutput "Examples:" "White"
@@ -237,5 +239,7 @@ try {
     exit 1
 }
 
-Write-ColoredOutput "`nPress any key to continue..." "Yellow"
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+if (-not $NoPause) {
+    Write-ColoredOutput "`nPress any key to continue..." "Yellow"
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
