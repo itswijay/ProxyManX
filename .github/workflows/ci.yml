@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ["3.9", "3.13"]
+        python: ["3.10", "3.13"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -89,6 +89,16 @@ jobs:
           (Get-Command proxymanx).Source
           proxymanx help
           if ($LASTEXITCODE -ne 0) { throw "help failed" }
+
+      - name: A failing command runs only once
+        run: |
+          $out = .\proxymanx.bat save nothing-to-save | Out-String
+          $code = $LASTEXITCODE
+          $out
+          if ($code -ne 1) { throw "expected exit code 1, got $code" }
+          $runs = [regex]::Matches($out, 'No active proxy settings').Count
+          if ($runs -ne 1) { throw "command ran $runs times" }
+          exit 0
 
       - name: Start the test proxy
         run: |
