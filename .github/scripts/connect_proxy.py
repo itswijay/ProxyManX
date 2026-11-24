@@ -2,10 +2,14 @@
 
 Usage: python connect_proxy.py PORT LOGFILE
 
+If PROXY_USER and PROXY_PASSWORD are set, clients must log in with them.
+
 Each tunnel is logged as "CONNECT host:port", so CI can prove that a tool
 really went through the proxy instead of connecting directly.
 """
 
+import base64
+import os
 import select
 import socket
 import socketserver
@@ -15,6 +19,10 @@ import threading
 PORT = int(sys.argv[1])
 LOGFILE = sys.argv[2]
 LOG_LOCK = threading.Lock()
+EXPECTED_AUTH = None
+if os.environ.get("PROXY_USER"):
+    credentials = f"{os.environ['PROXY_USER']}:{os.environ['PROXY_PASSWORD']}"
+    EXPECTED_AUTH = "Basic " + base64.b64encode(credentials.encode()).decode()
 
 
 def log(line):
@@ -31,7 +39,20 @@ class Handler(socketserver.BaseRequestHandler):
                 return
             head += chunk
 
-        method, target = head.split(b"\r\n", 1)[0].decode("latin-1").split(" ")[:2]
+        lines = head.split(b"\r\n\r\n", 1)[0].decode("latin-1").split("\r\n")
+        method, target = lines[0].split(" ")[:2]
+        headers = dict((k.strip().lower(), v.strip()) for k, _, v in (h.partition(":") for h in lines[1:]))
+
+        if EXPECTED_AUTH and headers.get("proxy-authorization") != EXPECTED_AUTH:
+            reason = "wrong login" if "proxy-authorization" in headers else "no login"
+            log(f"DENIED {target} ({reason})")
+            self.request.sendall(
+                b"HTTP/1.1 407 Proxy Authentication Required\r\n"
+                b'Proxy-Authenticate: Basic realm="ci"\r\n'
+                b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            return
+
         log(f"{method} {target}")
         if method != "CONNECT":
             self.request.sendall(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n")

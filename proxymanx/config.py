@@ -38,7 +38,7 @@ class ConfigManager:
             config_file = self.config_dir / f'{name}.ini'
             
             # Create ConfigParser instance
-            parser = configparser.ConfigParser()
+            parser = configparser.ConfigParser(interpolation=None)
             
             # Add proxy settings section
             parser.add_section('proxy')
@@ -83,7 +83,7 @@ class ConfigManager:
                 print_colored(f"Configuration '{name}' not found", self.colors['red'])
                 return None
             
-            parser = configparser.ConfigParser()
+            parser = configparser.ConfigParser(interpolation=None)
             parser.read(config_file)
             
             if not parser.has_section('proxy'):

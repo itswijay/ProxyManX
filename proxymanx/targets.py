@@ -4,6 +4,7 @@ Individual handlers for different proxy targets (System, Git, NPM, etc.)
 """
 
 import os
+import re
 import subprocess
 import platform
 from abc import ABC, abstractmethod
@@ -17,6 +18,8 @@ from .utils import (
     print_success,
     print_warning,
     run_command,
+    to_no_proxy,
+    to_windows_bypass,
 )
 
 # Windows-specific imports
@@ -48,6 +51,28 @@ else:
             pass
     
     winreg = MockWinreg()
+
+
+def broadcast_environment_change() -> None:
+    """Tell running programs that the saved environment variables changed.
+
+    Explorer reloads them on this message, which is how new terminals see the
+    change without signing out. It must be sent after the registry is written.
+    """
+    if platform.system() != "Windows":
+        return
+
+    try:
+        import ctypes
+
+        HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x1A, 0x0002
+        # The timeout keeps an unresponsive window from blocking us
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
+            SMTO_ABORTIFHUNG, 5000, None
+        )
+    except Exception:
+        pass  # The settings are saved either way
 
 
 class ProxyTarget(ABC):
@@ -105,11 +130,12 @@ class SystemProxyTarget(ProxyTarget):
             
             # Set proxy override (no_proxy)
             if config.get('no_proxy'):
-                winreg.SetValueEx(key, "ProxyOverride", 0, winreg.REG_SZ, config['no_proxy'])
+                winreg.SetValueEx(key, "ProxyOverride", 0, winreg.REG_SZ,
+                                  to_windows_bypass(config['no_proxy']))
             
             winreg.CloseKey(key)
             
-            # Refresh system settings (with timeout protection)
+            # Refresh system settings
             self._refresh_system_settings()
             
             print_success("System proxy settings updated")
@@ -141,7 +167,7 @@ class SystemProxyTarget(ProxyTarget):
             
             winreg.CloseKey(key)
             
-            # Refresh system settings (with timeout protection)
+            # Refresh system settings
             self._refresh_system_settings()
             
             print_success("System proxy settings cleared")
@@ -195,31 +221,13 @@ class SystemProxyTarget(ProxyTarget):
             if platform.system() != "Windows":
                 return
             
-            # Notify system of proxy changes with timeout
             import ctypes
-            from ctypes import wintypes
             
-            # Set a timeout for the SendMessage call to prevent hanging
-            # Use SendMessageTimeout instead of SendMessage for better control
-            user32 = ctypes.windll.user32
-            SMTO_ABORTIFHUNG = 0x0002
-            SMTO_NORMAL = 0x0000
-            timeout_ms = 5000  # 5 second timeout
-            
-            # Use SendMessageTimeoutW to prevent hanging
-            result = user32.SendMessageTimeoutW(
-                0xFFFF,  # HWND_BROADCAST
-                0x1A,    # WM_SETTINGCHANGE
-                0,       # wParam
-                "Environment",  # lParam
-                SMTO_ABORTIFHUNG,  # fuFlags
-                timeout_ms,  # uTimeout
-                None     # lpdwResult
-            )
-            
-            if result == 0:
-                # SendMessageTimeout failed or timed out, but don't raise an error
-                pass
+            # Make programs that use the system proxy reload it
+            INTERNET_OPTION_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH = 39, 37
+            wininet = ctypes.windll.wininet
+            wininet.InternetSetOptionW(None, INTERNET_OPTION_SETTINGS_CHANGED, None, 0)
+            wininet.InternetSetOptionW(None, INTERNET_OPTION_REFRESH, None, 0)
             
         except Exception:
             pass  # Ignore errors in refresh
@@ -259,8 +267,8 @@ class EnvironmentProxyTarget(ProxyTarget):
                 'HTTPS_PROXY': https_proxy,
                 'http_proxy': http_proxy,
                 'https_proxy': https_proxy,
-                'NO_PROXY': config.get('no_proxy', ''),
-                'no_proxy': config.get('no_proxy', '')
+                'NO_PROXY': to_no_proxy(config.get('no_proxy', '')),
+                'no_proxy': to_no_proxy(config.get('no_proxy', ''))
             }
             
             for key, value in env_vars.items():
@@ -328,6 +336,7 @@ class EnvironmentProxyTarget(ProxyTarget):
                 winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
             
             winreg.CloseKey(key)
+            broadcast_environment_change()
             return True
             
         except Exception:
@@ -345,6 +354,7 @@ class EnvironmentProxyTarget(ProxyTarget):
                     pass  # Variable doesn't exist
             
             winreg.CloseKey(key)
+            broadcast_environment_change()
             return True
             
         except Exception:
@@ -451,14 +461,15 @@ class NPMProxyTarget(ProxyTarget):
             # Set HTTPS proxy
             success2, _, err2 = run_command(f'npm config set https-proxy "{proxy_url}"')
             
-            # Set strict-ssl to false for proxy compatibility
-            success3, _, err3 = run_command("npm config set strict-ssl false")
-            
-            if success1 and success2 and success3:
+            if success1 and success2:
                 print_success("NPM proxy settings updated")
+                # ProxyManX before 2.1.0 turned certificate checking off
+                _, strict_ssl, _ = run_command("npm config get strict-ssl")
+                if strict_ssl.strip() == "false":
+                    print_warning("npm certificate checking is off. To turn it back on: npm config delete strict-ssl")
                 return True
             else:
-                print_error(f"Failed to set npm proxy: {err1} {err2} {err3}")
+                print_error(f"Failed to set npm proxy: {err1} {err2}")
                 return False
                 
         except Exception as e:
@@ -471,7 +482,8 @@ class NPMProxyTarget(ProxyTarget):
             # Remove proxy settings (ignore exit codes - configs may not exist)
             success1, _, _ = run_command("npm config delete proxy")
             success2, _, _ = run_command("npm config delete https-proxy")
-            success3, _, _ = run_command("npm config set strict-ssl true")
+            # Undo the "strict-ssl false" that ProxyManX before 2.1.0 set
+            success3, _, _ = run_command("npm config delete strict-ssl")
             
             # npm config delete returns non-zero when key doesn't exist, which is normal
             # So we consider it successful regardless of individual exit codes
@@ -496,16 +508,39 @@ class NPMProxyTarget(ProxyTarget):
         if success and https_proxy.strip() and https_proxy.strip() != "null":
             settings['https'] = https_proxy.strip()
         
-        # Get strict-ssl
-        success, strict_ssl, _ = run_command("npm config get strict-ssl")
-        if success and strict_ssl.strip():
-            settings['strict_ssl'] = strict_ssl.strip()
+        # Only worth showing next to a proxy; on its own it is not a proxy setting
+        if settings:
+            success, strict_ssl, _ = run_command("npm config get strict-ssl")
+            if success and strict_ssl.strip():
+                settings['strict_ssl'] = strict_ssl.strip()
         
         return settings if settings else None
 
 
 class PowerShellProxyTarget(ProxyTarget):
     """PowerShell proxy settings."""
+    
+    BLOCK_START = "# ProxyManX Windows - Proxy Settings"
+    BLOCK_END = "# ProxyManX Windows - End of Proxy Settings"
+    
+    BLOCK_PATTERN = re.compile(
+        rf'^{re.escape(BLOCK_START)}[^\n]*\n'
+        rf'(?:(?!{re.escape(BLOCK_START)})[^\n]*\n)*?'
+        rf'{re.escape(BLOCK_END)}[^\n]*(?:\n|\Z)',
+        re.MULTILINE
+    )
+    # Blocks written before 2.1.0 have no end marker, so match their exact lines
+    LEGACY_BLOCK_PATTERN = re.compile(
+        rf'^{re.escape(BLOCK_START)}\r?\n'
+        r'\$env:HTTP_PROXY = [^\n]*\n'
+        r'\$env:HTTPS_PROXY = [^\n]*\n'
+        r'\$env:NO_PROXY = [^\n]*\n'
+        r'\r?\n'
+        r'# Set system proxy for PowerShell web requests\r?\n'
+        r'\[System\.Net\.WebRequest\]::DefaultWebProxy = [^\n]*\n'
+        r'\[System\.Net\.WebRequest\]::DefaultWebProxy\.Credentials = [^\n]*(?:\n|\Z)',
+        re.MULTILINE
+    )
     
     def __init__(self):
         self.colors = get_colors()
@@ -550,22 +585,27 @@ class PowerShellProxyTarget(ProxyTarget):
             )
             
             # Remove existing proxy settings
-            self._remove_proxy_from_profile()
+            if not self._remove_proxy_from_profile():
+                return False
             
             # Add proxy settings to profile
-            proxy_script = f"""
-# ProxyManX Windows - Proxy Settings
+            proxy_script = f"""{self.BLOCK_START}
 $env:HTTP_PROXY = "{proxy_url}"
 $env:HTTPS_PROXY = "{proxy_url}"
-$env:NO_PROXY = "{config.get('no_proxy', '')}"
+$env:NO_PROXY = "{to_no_proxy(config.get('no_proxy', ''))}"
 
 # Set system proxy for PowerShell web requests
 [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy("{proxy_url}")
 [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
+{self.BLOCK_END}
 """
             
+            # Start on a new line even if the profile does not end with one
+            content = self._read_profile()
+            separator = "\n" if content and not content.endswith("\n") else ""
+            
             with open(self.profile_path, 'a', encoding='utf-8') as f:
-                f.write(proxy_script)
+                f.write(separator + proxy_script)
             
             print_success("PowerShell proxy settings updated")
             print_info("Restart PowerShell to apply changes")
@@ -578,7 +618,8 @@ $env:NO_PROXY = "{config.get('no_proxy', '')}"
     def unset_proxy(self) -> bool:
         """Unset PowerShell proxy settings."""
         try:
-            self._remove_proxy_from_profile()
+            if not self._remove_proxy_from_profile():
+                return False
             print_success("PowerShell proxy settings cleared")
             return True
             
@@ -586,39 +627,34 @@ $env:NO_PROXY = "{config.get('no_proxy', '')}"
             print_error(f"Failed to unset PowerShell proxy: {e}")
             return False
     
-    def _remove_proxy_from_profile(self) -> None:
-        """Remove proxy settings from PowerShell profile."""
+    def _read_profile(self) -> str:
+        """Read the profile, keeping its line endings as they are."""
         if not self.profile_path.exists():
-            return
-        
+            return ""
+        with open(self.profile_path, 'r', encoding='utf-8', newline='') as f:
+            return f.read()
+    
+    def _remove_proxy_from_profile(self) -> bool:
+        """Remove only the lines ProxyManX added to the PowerShell profile."""
         try:
-            # Read current profile
-            with open(self.profile_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            content = self._read_profile()
+            # Order matters: the legacy pattern also matches the body of a
+            # current block and would leave its end marker behind
+            cleaned = self.BLOCK_PATTERN.sub('', content)
+            cleaned = self.LEGACY_BLOCK_PATTERN.sub('', cleaned)
             
-            # Remove proxy settings
-            lines = content.split('\n')
-            new_lines = []
-            skip_lines = False
+            if cleaned != content:
+                with open(self.profile_path, 'w', encoding='utf-8', newline='') as f:
+                    f.write(cleaned)
             
-            for line in lines:
-                if "# ProxyManX Windows - Proxy Settings" in line:
-                    skip_lines = True
-                    continue
-                elif skip_lines and (line.strip() == "" or line.startswith("#")):
-                    continue
-                elif skip_lines and not line.startswith(("$env:", "[System.Net.WebRequest]")):
-                    skip_lines = False
-                    new_lines.append(line)
-                elif not skip_lines:
-                    new_lines.append(line)
-            
-            # Write back to profile
-            with open(self.profile_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(new_lines))
+            if self.BLOCK_START in cleaned:
+                print_error(f"The ProxyManX block in {self.profile_path} was edited. Please remove it by hand.")
+                return False
+            return True
                 
         except Exception as e:
             print_error(f"Failed to clean PowerShell profile: {e}")
+            return False
     
     def list_proxy(self) -> Optional[Dict[str, Any]]:
         """List current PowerShell proxy settings."""

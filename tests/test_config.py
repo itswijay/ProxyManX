@@ -189,3 +189,10 @@ def test_messages_survive_the_windows_encoding(manager, sample_config, capsys):
     manager.delete_config('nope')
 
     capsys.readouterr().out.encode('cp1252')
+
+
+def test_percent_signs_are_saved(manager, sample_config):
+    # Regression: ConfigParser treats '%' as interpolation by default
+    sample_config['username'] = 'a%b'
+    assert manager.save_config('office', sample_config)
+    assert manager.load_config('office')['username'] == 'a%b'
