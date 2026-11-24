@@ -3,12 +3,15 @@ ProxyManX Windows - Utility Functions
 Common utilities and helper functions used across the application.
 """
 
+import ipaddress
 import os
+import re
 import sys
 import subprocess
 import ctypes
 import signal
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote, unquote
 from colorama import init, Fore, Back, Style
 
 # Initialize colorama for Windows
@@ -115,6 +118,8 @@ def validate_proxy_config(config: Dict[str, Any]) -> bool:
 def format_proxy_url(host: str, port: int, username: str = None, password: str = None, protocol: str = 'http') -> str:
     """Format proxy URL with authentication if provided."""
     if username and password:
+        # Characters such as '#', '/' and '@' would otherwise break the URL
+        username, password = quote(username, safe=''), quote(password, safe='')
         return f"{protocol}://{username}:{password}@{host}:{port}"
     return f"{protocol}://{host}:{port}"
 
@@ -174,9 +179,63 @@ def parse_proxy_url(url: str) -> Optional[Dict[str, Any]]:
     return {
         'host': host,
         'port': port,
-        'username': username,
-        'password': password,
+        'username': unquote(username),
+        'password': unquote(password),
     }
+
+
+def _split_no_proxy(value: str) -> List[str]:
+    """Split a bypass list written with commas, semicolons or spaces."""
+    return [entry for entry in re.split(r'[,;\s]+', value or '') if entry]
+
+
+def to_no_proxy(value: str) -> str:
+    """Convert a bypass list to the form NO_PROXY tools understand.
+
+    They match domain suffixes and CIDR blocks, not wildcards, so '*.local'
+    becomes '.local' and '10.*' becomes '10.0.0.0/8'.
+    """
+    result = []
+    for entry in _split_no_proxy(value):
+        octets = re.match(r'^((?:\d{1,3}\.){1,3})\*(?:\.\*)*$', entry)
+        if octets:
+            parts = octets.group(1).rstrip('.').split('.')
+            address = '.'.join(parts + ['0'] * (4 - len(parts)))
+            entry = f"{address}/{8 * len(parts)}"
+        elif entry.startswith('*.'):
+            entry = entry[1:]
+        elif entry == '<local>':
+            continue  # Windows-only keyword
+        result.append(entry)
+    return ','.join(result)
+
+
+def to_windows_bypass(value: str) -> str:
+    """Convert a bypass list to the form the Windows ProxyOverride value needs.
+
+    Windows separates entries with semicolons and matches wildcards, not CIDR
+    blocks, so '.local' becomes '*.local' and '10.0.0.0/8' becomes '10.*'.
+    """
+    result = []
+    for entry in _split_no_proxy(value):
+        if '/' in entry:
+            try:
+                network = ipaddress.IPv4Network(entry, strict=False)
+            except ValueError:
+                result.append(entry)
+                continue
+            # Wildcards work on whole octets, so widen to the next boundary
+            octet_count = -(-network.prefixlen // 8)
+            for subnet in network.subnets(new_prefix=octet_count * 8):
+                parts = str(subnet.network_address).split('.')[:octet_count]
+                result.append('.'.join(parts + ([] if octet_count == 4 else ['*'])))
+            continue
+        if entry.startswith('.'):
+            entry = f"*{entry}"
+        elif entry.count(':') > 1 and not entry.startswith('['):
+            entry = f"[{entry}]"  # IPv6
+        result.append(entry)
+    return ';'.join(result)
 
 
 def run_command(cmd: str, shell: bool = True) -> tuple:

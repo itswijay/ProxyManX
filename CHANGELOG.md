@@ -43,6 +43,19 @@
   port as a string.
 - The PowerShell uninstaller invoked `unset` without `all` and would hang on the
   interactive prompt — the same bug fixed for the Python uninstaller in 2.0.0.
+- Proxy usernames and passwords with characters such as `#`, `/` or `@` broke the
+  proxy URL. They are now encoded. Values containing `%` can be saved too.
+- New terminals now see the proxy without signing out. Windows was told about
+  the change before the variables were written.
+- The bypass list is written in the form each tool expects: `10.*;*.local` for
+  the Windows system proxy, `10.0.0.0/8,.local` for `NO_PROXY`.
+- npm certificate checking (`strict-ssl`) is no longer turned off. `set` warns if
+  an older version left it off, and `unset` turns it back on.
+- `configs` showed npm as active even with no proxy set.
+- `unset` could delete the user's own lines after the ProxyManX block in the
+  PowerShell profile. A profile that cannot be read is now left untouched.
+- Programs using the Windows system proxy are told to reload it after a change.
+- Running the tests on Windows no longer overwrites the user's proxy settings.
 - `install.ps1` had a stray closing brace after `Install-Dependencies`, a syntax
   error that stops PowerShell from running the script.
 - Saving, deleting or failing to load a profile crashed on Windows when the output
