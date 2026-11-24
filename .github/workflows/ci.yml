@@ -49,6 +49,9 @@ jobs:
     env:
       PROXY_URL: http://127.0.0.1:8899
       PROXY_LOG: ${{ github.workspace }}\..\proxy.log
+      AUTH_PROXY_LOG: ${{ github.workspace }}\..\auth-proxy.log
+      WATCH_LOG: ${{ github.workspace }}\..\watch.log
+      TEST_PROXY_PASSWORD: 'p@ss#1/2&3%41"5^6 $7!'
       INTERNET_SETTINGS: HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings
     steps:
       - uses: actions/checkout@v7
@@ -100,19 +103,34 @@ jobs:
           if ($runs -ne 1) { throw "command ran $runs times" }
           exit 0
 
-      - name: Start the test proxy
+      - name: Start the test proxies and the settings watcher
         run: |
-          Start-Process python -WindowStyle Hidden -ArgumentList ".github\scripts\connect_proxy.py", "8899", "`"$env:PROXY_LOG`""
-          foreach ($i in 1..30) {
-            if ((Test-Path $env:PROXY_LOG) -and (Select-String -Path $env:PROXY_LOG -Pattern LISTENING -Quiet)) { exit 0 }
-            Start-Sleep -Milliseconds 500
+          function Start-Helper($script, $log, $ready, $port) {
+            $arguments = @(".github\scripts\$script") + @($port | Where-Object { $_ }) + @("`"$log`"")
+            Start-Process python -WindowStyle Hidden -ArgumentList $arguments
+            foreach ($i in 1..30) {
+              if ((Test-Path $log) -and (Select-String -Path $log -Pattern $ready -Quiet)) { return }
+              Start-Sleep -Milliseconds 500
+            }
+            throw "$script did not start"
           }
-          throw "test proxy did not start"
+          Start-Helper connect_proxy.py $env:PROXY_LOG LISTENING 8899
+          Start-Helper watch_settings.py $env:WATCH_LOG WATCHING
+          $env:PROXY_USER = 'user@uni'
+          $env:PROXY_PASSWORD = $env:TEST_PROXY_PASSWORD
+          Start-Helper connect_proxy.py $env:AUTH_PROXY_LOG LISTENING 8898
+
+      - name: Create a PowerShell profile with the user's own lines
+        run: |
+          $path = powershell -NoProfile -Command '$PROFILE'
+          New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null
+          Set-Content $path -Encoding ascii -Value '$mine = "before"'
+          "PS_PROFILE=$path" >> $env:GITHUB_ENV
 
       - name: proxymanx set (all targets) and save as 'hostel'
         run: |
           # host, port, auth?, same for https/ftp?, no_proxy, targets, save?, name
-          '127.0.0.1', '8899', 'n', 'y', 'localhost', '0', 'y', 'hostel' | .\proxymanx.bat set
+          '127.0.0.1', '8899', 'n', 'y', 'localhost,*.local,10.*', '0', 'y', 'hostel' | .\proxymanx.bat set
           if ($LASTEXITCODE -ne 0) { throw "set failed" }
 
       - name: All five targets are set
@@ -125,9 +143,18 @@ jobs:
           $reg = Get-ItemProperty $env:INTERNET_SETTINGS
           Expect 'system ProxyEnable' $reg.ProxyEnable 1
           Expect 'system ProxyServer' $reg.ProxyServer '127.0.0.1:8899'
+          Expect 'system ProxyOverride' $reg.ProxyOverride 'localhost;*.local;10.*'
+          # Ask Windows itself, not just the registry
+          foreach ($case in @('http://10.1.2.3/', 'True'), @('http://printer.local/', 'True'), @('http://example.com/', 'False')) {
+            $bypassed = powershell -NoProfile -Command "[System.Net.WebRequest]::GetSystemWebProxy().IsBypassed('$($case[0])')"
+            Expect "Windows bypasses $($case[0])" $bypassed $case[1]
+          }
           foreach ($v in 'HTTP_PROXY', 'HTTPS_PROXY') {
             Expect "environment $v" ([Environment]::GetEnvironmentVariable($v, 'User')) $env:PROXY_URL
           }
+          Expect 'environment NO_PROXY' ([Environment]::GetEnvironmentVariable('NO_PROXY', 'User')) 'localhost,.local,10.0.0.0/8'
+          Expect 'what new terminals were told' (Get-Content $env:WATCH_LOG | Select-Object -Last 1) "Environment HTTP_PROXY=$env:PROXY_URL"
+          Expect 'npm strict-ssl' (npm config get strict-ssl) 'true'
           Expect 'git http.proxy' (git config --global http.proxy) $env:PROXY_URL
           # npm adds a trailing slash to URLs
           Expect 'npm proxy' ((npm config get proxy) -replace '/$') $env:PROXY_URL
@@ -176,6 +203,8 @@ jobs:
 
       - name: proxymanx unset all
         run: |
+          # Lines that the old cleanup deleted along with its own block
+          Add-Content $env:PS_PROFILE -Encoding ascii -Value '# my own comment', '$env:MINE = "after"'
           .\proxymanx.bat unset all
           if ($LASTEXITCODE -ne 0) { throw "unset failed" }
 
@@ -196,7 +225,43 @@ jobs:
           $npmProxy = npm config get proxy
           if ($npmProxy -ne 'null') { $problems += "npm proxy is still '$npmProxy'" }
           ExpectEmpty 'powershell profile' (powershell -ExecutionPolicy Bypass -Command '$env:HTTP_PROXY')
+          $userLines = (Get-Content $env:PS_PROFILE) -join '|'
+          "user profile lines = $userLines"
+          if ($userLines -ne '$mine = "before"|# my own comment|$env:MINE = "after"') { $problems += "user profile lines changed: $userLines" }
+          $told = Get-Content $env:WATCH_LOG | Select-Object -Last 1
+          "what new terminals were told = $told"
+          if ($told -ne 'Environment HTTP_PROXY=') { $problems += "last broadcast was '$told'" }
+          $configs = .\proxymanx.bat configs | Out-String
+          if ($configs -match '\[ACTIVE\] (Npm|Git|Powershell)') { $problems += "configs still shows an active target: $configs" }
           if ($problems) { throw ($problems -join "`n") }
+          exit 0
+
+      - name: Login with a password full of special characters
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          # host, port, auth?, user, same for https/ftp?, no_proxy, targets, save?
+          '127.0.0.1', '8898', 'y', 'user@uni', 'y', 'localhost', '0', 'n' | python .github\scripts\run_with_password.py set
+          if ($LASTEXITCODE -ne 0) { throw "set failed" }
+
+          git clone --depth 1 "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY" "$env:RUNNER_TEMP\cloned-auth"
+          if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
+          New-Item -ItemType Directory "$env:RUNNER_TEMP\npmtest-auth" | Out-Null
+          Push-Location "$env:RUNNER_TEMP\npmtest-auth"
+          npm install --no-audit --no-fund --cache "$env:RUNNER_TEMP\npmcache-auth" is-number
+          $npmExit = $LASTEXITCODE
+          Pop-Location
+          if ($npmExit -ne 0) { throw "npm install failed" }
+
+          $log = Get-Content $env:AUTH_PROXY_LOG
+          $log
+          if ($log -match 'wrong login') { throw "a wrong password was sent" }
+          if ($log -notcontains 'CONNECT github.com:443') { throw "git did not log in to the proxy" }
+          if ($log -notcontains 'CONNECT registry.npmjs.org:443') { throw "npm did not log in to the proxy" }
+
+          .\proxymanx.bat unset all
+          if ($LASTEXITCODE -ne 0) { throw "unset failed" }
+          if (git config --global http.proxy) { throw "git proxy not cleared" }
           exit 0
 
       - name: uninstall.ps1
@@ -208,6 +273,9 @@ jobs:
           $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
           if (($userPath -split ';') -contains $env:GITHUB_WORKSPACE) { throw "still in user PATH" }
 
-      - name: Test proxy log
+      - name: Helper logs
         if: always()
-        run: if (Test-Path $env:PROXY_LOG) { Get-Content $env:PROXY_LOG }
+        run: |
+          foreach ($log in $env:PROXY_LOG, $env:AUTH_PROXY_LOG, $env:WATCH_LOG) {
+            if (Test-Path $log) { "--- $log"; Get-Content $log }
+          }
