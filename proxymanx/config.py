@@ -59,11 +59,11 @@ class ConfigManager:
             with open(config_file, 'w') as f:
                 parser.write(f)
             
-            print_colored(f"✅ Configuration saved to {config_file}", self.colors['green'])
+            print_colored(f"Configuration saved to {config_file}", self.colors['green'])
             return True
             
         except Exception as e:
-            print_colored(f"❌ Error saving configuration: {e}", self.colors['red'])
+            print_colored(f"Error saving configuration: {e}", self.colors['red'])
             return False
     
     def load_config(self, name: str) -> Optional[Dict[str, Any]]:
@@ -80,14 +80,14 @@ class ConfigManager:
             config_file = self.config_dir / f'{name}.ini'
             
             if not config_file.exists():
-                print_colored(f"❌ Configuration '{name}' not found", self.colors['red'])
+                print_colored(f"Configuration '{name}' not found", self.colors['red'])
                 return None
             
             parser = configparser.ConfigParser()
             parser.read(config_file)
             
             if not parser.has_section('proxy'):
-                print_colored(f"❌ Invalid configuration file: {config_file}", self.colors['red'])
+                print_colored(f"Invalid configuration file: {config_file}", self.colors['red'])
                 return None
             
             config = {
@@ -117,7 +117,7 @@ class ConfigManager:
             return config
             
         except Exception as e:
-            print_colored(f"❌ Error loading configuration: {e}", self.colors['red'])
+            print_colored(f"Error loading configuration: {e}", self.colors['red'])
             return None
     
     def delete_config(self, name: str) -> bool:
@@ -133,7 +133,7 @@ class ConfigManager:
                     deleted = True
 
             if not deleted:
-                print_colored(f"❌ Configuration '{name}' not found", self.colors['red'])
+                print_colored(f"Configuration '{name}' not found", self.colors['red'])
                 return False
 
             # A deleted profile can no longer be the active one. get_active_profile()
@@ -142,11 +142,11 @@ class ConfigManager:
             if self._read_active_profile() == name:
                 self.clear_active_profile()
 
-            print_colored(f"✅ Configuration '{name}' deleted", self.colors['green'])
+            print_colored(f"Configuration '{name}' deleted", self.colors['green'])
             return True
             
         except Exception as e:
-            print_colored(f"❌ Error deleting configuration: {e}", self.colors['red'])
+            print_colored(f"Error deleting configuration: {e}", self.colors['red'])
             return False
     
     def print_configs(self) -> None:

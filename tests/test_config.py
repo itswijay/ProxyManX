@@ -177,3 +177,15 @@ def test_config_dir_is_created(tmp_path):
     target = tmp_path / 'nested' / 'proxymanx'
     ConfigManager(config_dir=target)
     assert target.is_dir()
+
+
+def test_messages_survive_the_windows_encoding(manager, sample_config, capsys):
+    # Regression: piped output on Windows is cp1252, which cannot encode emoji.
+    # The crash happened after the profile was written, so `set` lost track of
+    # the active profile.
+    manager.save_config('office', sample_config)
+    manager.load_config('nope')
+    manager.delete_config('office')
+    manager.delete_config('nope')
+
+    capsys.readouterr().out.encode('cp1252')

@@ -207,7 +207,7 @@ def main():
     print_colored("\nUninstallation completed!", 'green')
     print_colored("ProxyManX Windows has been removed from your system.", 'green')
     
-    print_colored("\n📋 Manual cleanup (if needed):", 'cyan')
+    print_colored("\nManual cleanup (if needed):", 'cyan')
     print_colored("  • Check Windows proxy settings in Internet Options", 'white')
     print_colored("  • Verify git proxy settings: git config --global -l", 'white')
     print_colored("  • Check npm proxy settings: npm config list", 'white')
