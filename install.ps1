@@ -57,11 +57,11 @@ function Create-BatchFile {
     
     $batchContent = @'
 @echo off
+setlocal
 cd /d "%~dp0"
-python -m proxymanx %*
-if %ERRORLEVEL% neq 0 (
-    py -m proxymanx %*
-)
+set "PYTHON_CMD=python"
+python --version >nul 2>&1 || set "PYTHON_CMD=py"
+%PYTHON_CMD% -m proxymanx %*
 '@
     
     try {
