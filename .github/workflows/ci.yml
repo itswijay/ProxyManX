@@ -1,0 +1,203 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install with pip
+        run: pip install ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest -v
+
+      - name: Installed command works outside the checkout
+        working-directory: ${{ runner.temp }}
+        run: proxymanx help
+
+  windows-e2e:
+    name: Windows end to end
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PROXY_URL: http://127.0.0.1:8899
+      PROXY_LOG: ${{ github.workspace }}\..\proxy.log
+      INTERNET_SETTINGS: HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: PowerShell scripts parse (PowerShell 7 and Windows PowerShell 5.1)
+        run: |
+          $check = {
+            $bad = 0
+            foreach ($f in Get-ChildItem *.ps1) {
+              $errs = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs)
+              foreach ($e in $errs) { "$($f.Name):$($e.Extent.StartLineNumber) $($e.Message)"; $bad++ }
+            }
+            "PowerShell $($PSVersionTable.PSVersion): $bad error(s)"
+            exit $bad
+          }
+          foreach ($exe in 'pwsh', 'powershell') {
+            & $exe -NoProfile -Command $check
+            if ($LASTEXITCODE -ne 0) { throw "$exe found syntax errors" }
+          }
+
+      # A child process is used so the installer runs as it does for a user,
+      # in Windows PowerShell 5.1 and without the runner's error settings.
+      - name: install.ps1
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Simple -NoPause
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed with exit code $LASTEXITCODE" }
+
+      - name: The new user PATH finds proxymanx
+        working-directory: ${{ runner.temp }}
+        run: |
+          $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+          if (($userPath -split ';') -notcontains $env:GITHUB_WORKSPACE) { throw "not in user PATH: $userPath" }
+          $env:PATH = "$env:PATH;$userPath"
+          (Get-Command proxymanx).Source
+          proxymanx help
+          if ($LASTEXITCODE -ne 0) { throw "help failed" }
+
+      - name: Start the test proxy
+        run: |
+          Start-Process python -WindowStyle Hidden -ArgumentList ".github\scripts\connect_proxy.py", "8899", "`"$env:PROXY_LOG`""
+          foreach ($i in 1..30) {
+            if ((Test-Path $env:PROXY_LOG) -and (Select-String -Path $env:PROXY_LOG -Pattern LISTENING -Quiet)) { exit 0 }
+            Start-Sleep -Milliseconds 500
+          }
+          throw "test proxy did not start"
+
+      - name: proxymanx set (all targets) and save as 'hostel'
+        run: |
+          # host, port, auth?, same for https/ftp?, no_proxy, targets, save?, name
+          '127.0.0.1', '8899', 'n', 'y', 'localhost', '0', 'y', 'hostel' | .\proxymanx.bat set
+          if ($LASTEXITCODE -ne 0) { throw "set failed" }
+
+      - name: All five targets are set
+        run: |
+          $problems = @()
+          function Expect($what, $actual, $expected) {
+            "$what = $actual"
+            if ("$actual" -ne "$expected") { $script:problems += "${what}: expected '$expected', got '$actual'" }
+          }
+          $reg = Get-ItemProperty $env:INTERNET_SETTINGS
+          Expect 'system ProxyEnable' $reg.ProxyEnable 1
+          Expect 'system ProxyServer' $reg.ProxyServer '127.0.0.1:8899'
+          foreach ($v in 'HTTP_PROXY', 'HTTPS_PROXY') {
+            Expect "environment $v" ([Environment]::GetEnvironmentVariable($v, 'User')) $env:PROXY_URL
+          }
+          Expect 'git http.proxy' (git config --global http.proxy) $env:PROXY_URL
+          # npm adds a trailing slash to URLs
+          Expect 'npm proxy' ((npm config get proxy) -replace '/$') $env:PROXY_URL
+          Expect 'npm https-proxy' ((npm config get https-proxy) -replace '/$') $env:PROXY_URL
+          Expect 'powershell profile' (powershell -ExecutionPolicy Bypass -Command '$env:HTTP_PROXY') $env:PROXY_URL
+          if ($problems) { throw ($problems -join "`n") }
+
+      - name: list, configs, save and load
+        run: |
+          $list = .\proxymanx.bat list | Out-String
+          $list
+          if ($list -notmatch 'Currently active: hostel') { throw "hostel should be active after set" }
+
+          $configs = .\proxymanx.bat configs | Out-String
+          $configs
+          foreach ($t in 'System', 'Environment', 'Git', 'Npm', 'Powershell') {
+            # Environment is read from the process, so it only shows in new terminals
+            if ($t -ne 'Environment' -and $configs -notmatch "\[ACTIVE\] $t") { throw "$t should be active" }
+          }
+
+          # The environment is clean here, so save must fall back to the system proxy
+          .\proxymanx.bat save snapshot
+          if ($LASTEXITCODE -ne 0) { throw "save failed" }
+
+          '0' | .\proxymanx.bat load snapshot
+          if ($LASTEXITCODE -ne 0) { throw "load failed" }
+          $list = .\proxymanx.bat list | Out-String
+          if ($list -notmatch 'Currently active: snapshot') { throw "snapshot should be active after load: $list" }
+
+      - name: git and npm really use the proxy
+        run: |
+          $before = @(Get-Content $env:PROXY_LOG).Count
+          git clone --depth 1 "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY" "$env:RUNNER_TEMP\cloned"
+          if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
+          New-Item -ItemType Directory "$env:RUNNER_TEMP\npmtest" | Out-Null
+          Push-Location "$env:RUNNER_TEMP\npmtest"
+          npm install --no-audit --no-fund --cache "$env:RUNNER_TEMP\npmcache" is-number
+          $npmExit = $LASTEXITCODE
+          Pop-Location
+          if ($npmExit -ne 0) { throw "npm install failed" }
+
+          $log = Get-Content $env:PROXY_LOG | Select-Object -Skip $before
+          $log
+          if ($log -notcontains 'CONNECT github.com:443') { throw "git did not use the proxy" }
+          if ($log -notcontains 'CONNECT registry.npmjs.org:443') { throw "npm did not use the proxy" }
+
+      - name: proxymanx unset all
+        run: |
+          .\proxymanx.bat unset all
+          if ($LASTEXITCODE -ne 0) { throw "unset failed" }
+
+      - name: All five targets are cleared
+        run: |
+          $problems = @()
+          function ExpectEmpty($what, $actual) {
+            "$what = '$actual'"
+            if ($actual) { $script:problems += "$what is still '$actual'" }
+          }
+          $reg = Get-ItemProperty $env:INTERNET_SETTINGS
+          ExpectEmpty 'system ProxyServer' $reg.ProxyServer
+          if ($reg.ProxyEnable -ne 0) { $problems += "system ProxyEnable is still $($reg.ProxyEnable)" }
+          foreach ($v in 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY') {
+            ExpectEmpty "environment $v" ([Environment]::GetEnvironmentVariable($v, 'User'))
+          }
+          ExpectEmpty 'git http.proxy' (git config --global http.proxy)
+          $npmProxy = npm config get proxy
+          if ($npmProxy -ne 'null') { $problems += "npm proxy is still '$npmProxy'" }
+          ExpectEmpty 'powershell profile' (powershell -ExecutionPolicy Bypass -Command '$env:HTTP_PROXY')
+          if ($problems) { throw ($problems -join "`n") }
+          exit 0
+
+      - name: uninstall.ps1
+        timeout-minutes: 2
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1 -Force -NoPause
+          if ($LASTEXITCODE -ne 0) { throw "uninstall.ps1 failed with exit code $LASTEXITCODE" }
+          if (Test-Path "$HOME\.proxymanx") { throw "profiles were not removed" }
+          $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+          if (($userPath -split ';') -contains $env:GITHUB_WORKSPACE) { throw "still in user PATH" }
+
+      - name: Test proxy log
+        if: always()
+        run: if (Test-Path $env:PROXY_LOG) { Get-Content $env:PROXY_LOG }

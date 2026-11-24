@@ -25,6 +25,9 @@
   "use `set` instead".
 - A pytest suite covering profile storage, URL parsing, config validation and
   the environment target. Run with `pip install -e ".[dev]"` then `pytest`.
+- GitHub Actions workflow that runs the tests on Linux and Windows, and runs the
+  PowerShell installer, all five targets and the uninstaller on Windows.
+- `-NoPause` option for `install.ps1` and `uninstall.ps1`, for unattended use.
 
 ### Fixed
 
